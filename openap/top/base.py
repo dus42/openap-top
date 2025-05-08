@@ -240,7 +240,7 @@ class Base:
 
         self.polydeg = polydeg
 
-        max_iteration = kwargs.get("max_iteration", 5000)
+        max_iteration = kwargs.get("max_iteration", 1000)
         tol = kwargs.get("tol", 1e-6)
         acceptable_tol = kwargs.get("acceptable_tol", 1e-4)
         alpha_for_y = kwargs.get("alpha_for_y", "primal-and-full")
@@ -307,7 +307,7 @@ class Base:
         u0 = self.u_guess
         dt0 = self.range / 200 / self.nodes
         cost = np.sum(self.objective(x0, u0, dt0, symbolic=False, **kwargs))
-        L = L / cost * 1e3
+        # L = L / cost* 1e3
 
         # Continuous time dynamics
         self.func_dynamics = ca.Function(
@@ -336,7 +336,7 @@ class Base:
             )
             v = openap.aero.mach2tas(mach, h, self.dT)
 
-        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT = self.dT,limit=False)
+        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT = self.dT, limit=False)
         co2 = emission.co2(ff)
         h2o = emission.h2o(ff)
         sox = emission.sox(ff)
@@ -352,6 +352,7 @@ class Base:
         if symbolic:
             fuelflow = self.fuelflow
             v = oc.aero.mach2tas(mach, h, self.dT)
+            acc = ca.sqrt((v) ** 2 + vs**2) / dt
         else:
             fuelflow = openap.FuelFlow(
                 self.actype,
@@ -360,7 +361,7 @@ class Base:
                 force_engine=True,
             )
             v = openap.aero.mach2tas(mach, h, self.dT)
-
+            acc = np.sqrt((v) ** 2 + vs**2) / dt
         ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT,limit=False)
         return ff * dt
 
@@ -461,7 +462,7 @@ class Base:
         time_dependent = kwargs.get("time_dependent", True)
         assert n_dim in [3, 4]
 
-        self.solver_options["ipopt.hessian_approximation"] = "limited-memory"
+        # self.solver_options["ipopt.hessian_approximation"] = "limited-memory"
 
         lon, lat = self.proj(xp, yp, inverse=True, symbolic=symbolic)
 
@@ -558,14 +559,18 @@ class Base:
             use_synonym=self.use_synonym,
             force_engine=True,
         )
-
+        thrust = openap.Thrust(self.actype, self.engtype)
+        
         # fast way to calculate fuel flow without iterate over rows
         mass = self.mass_init * np.ones_like(mass)
         for i in range(5):
             ff = fuelflow.enroute(mass=mass, tas=tas, alt=alt, vs=vertrate, dT=self.dT)
             fuel = ff * self.dt
             mass[1:] = self.mass_init - fuel.cumsum()[:-1]
+            thrust = thrust.enroute(mass=mass, tas=tas, alt=alt, vs=vertrate, dT=self.dT)
 
-        df = df.assign(fuel=fuel.round(2), mass=mass.round())
+        df = df.assign(
+            fuel=fuel.round(2), mass=mass.round(), thrust=abs(thrust.round())
+        )
 
         return df

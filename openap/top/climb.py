@@ -5,7 +5,7 @@ import casadi as ca
 import numpy as np
 import openap.casadi as oc
 import pandas as pd
-from openap.extra.aero import fpm, ft, kts
+from openap.extra.aero import fpm, ft, kts, nm
 
 from .base import Base
 from .cruise import Cruise
@@ -16,7 +16,7 @@ class Climb(Base):
         super().__init__(*args, **kwargs)
         self.cruise = Cruise(*args, **kwargs)
 
-    def init_conditions(self, df_cruise):
+    def init_conditions(self, **kwargs):
         """Initialize direct collocation bounds and guesses."""
 
         # Convert lat/lon to cartisian coordinates.
@@ -26,64 +26,113 @@ class Climb(Base):
         x_max = max(xp_0, xp_f) + 10_000
         y_min = min(yp_0, yp_f) - 10_000
         y_max = max(yp_0, yp_f) + 10_000
-        od_bearing = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
-        od_psi = od_bearing * pi / 180
+
+        h_end = kwargs.get("h_end", None)
+        mach_end = kwargs.get("mach_end", self.aircraft["cruise"]["mach"])
+        trk_end = kwargs.get(
+            "trk_end", oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
+        )
+        trk_start = kwargs.get("trk_start", None)
+
+        self.range = np.sqrt((xp_0 - xp_f) ** 2 + (yp_0 - yp_f) ** 2)
+
+        if h_end is None:
+            h_end = self.range * np.sin(5 * pi / 180)
+            h_end_min = self.range * np.sin(3 * pi / 180)
+            h_end_max = self.range * np.sin(10 * pi / 180)
+        else:
+            h_end_min = h_end - 1000 * ft
+            h_end_max = h_end + 1000 * ft
+
+        psi_end = trk_end * pi / 180
+
+        if trk_start is None:
+            self.psi_start = psi_end
+        else:
+            self.psi_start = trk_start * pi / 180
 
         mass_0 = self.mass_init
-        mass_oew = self.aircraft["limits"]["OEW"]
+        mass_oew = self.aircraft["oew"]
+        mach_max = self.aircraft["mmo"]
         h_min = 100 * ft
-        h_toc = df_cruise.h.iloc[0]
-        cruise_mach = df_cruise.mach.iloc[0]
-        self.traj_range = self.wrap.climb_range()["maximum"] * 1000 * 1.5
+        h_max = self.aircraft["ceiling"]
 
         # Initial conditions - Lower and upper bounds
         self.x_0_lb = self.x_0_ub = [xp_0, yp_0, h_min, mass_0, 0]
 
         # Final conditions - Lower and upper bounds
-        self.x_f_lb = [x_min, y_min, h_toc, mass_oew, 0]
-        self.x_f_ub = [x_max, y_max, h_toc + 1000, mass_0, 6 * 3600]
+        self.x_f_lb = [xp_f, yp_f, h_end_min, mass_oew, 0]
+        self.x_f_ub = [xp_f, yp_f, h_end_max, mass_0, 3600]
 
         # States - Lower and upper bounds
         self.x_lb = [x_min, y_min, h_min, mass_oew, 0]
-        self.x_ub = [x_max, y_max, h_toc, mass_0, 24 * 3600]
+        self.x_ub = [x_max, y_max, h_max, mass_0, 6 * 3600]
+        if trk_start is None:
+            self.x_1_lb = self.x_lb
+            self.x_1_ub = self.x_ub
+        else:
+            xp_1 = xp_0 + 2 * nm * np.sin(self.psi_start)
+            yp_1 = yp_0 + 2 * nm * np.cos(self.psi_start)
+            self.x_1_lb = [xp_1, yp_1, h_min, mass_oew, 0]
+            self.x_1_ub = [xp_1, yp_1, h_max, mass_0, 3600]
 
         # States - guesses
-        xp_guess = xp_0 + np.linspace(
-            0, self.traj_range * np.sin(od_psi), self.nodes + 1
-        )
-        yp_guess = yp_0 + np.linspace(
-            0, self.traj_range * np.cos(od_psi), self.nodes + 1
-        )
-        h_guess = np.linspace(h_min, h_toc, self.nodes + 1)
+        xp_guess = xp_0 + np.linspace(0, self.range * np.sin(psi_end), self.nodes + 1)
+        yp_guess = yp_0 + np.linspace(0, self.range * np.cos(psi_end), self.nodes + 1)
+        h_guess = np.linspace(h_min, h_end, self.nodes + 1)
         m_guess = mass_0 * np.ones(self.nodes + 1)
         ts_guess = np.linspace(0, 6 * 3600, self.nodes + 1)
-        self.x_guess = np.vstack([xp_guess, yp_guess, h_guess, m_guess, ts_guess]).T
-
+        if trk_start is None:
+            self.x_guess = np.vstack([xp_guess, yp_guess, h_guess, m_guess, ts_guess]).T
+        else:
+            xp_guess = xp_1 + np.linspace(0, self.range * np.sin(psi_end), self.nodes)
+            yp_guess = yp_1 + np.linspace(0, self.range * np.cos(psi_end), self.nodes)
+            xp_guess = np.insert(xp_guess, 0, xp_0)
+            yp_guess = np.insert(yp_guess, 0, yp_0)
+            self.x_guess = np.vstack([xp_guess, yp_guess, h_guess, m_guess, ts_guess]).T
         # Control init - lower and upper bounds
-        self.u_0_lb = [0.1, 0 * fpm, -pi]
-        self.u_0_ub = [0.4, 2500 * fpm, 3 * pi]
+        # self.u_0_lb = [0.2, 0 * fpm, psi_end - pi / 2]
+        # self.u_0_ub = [0.3, 2500 * fpm, psi_end + pi / 2]
+        self.u_0_lb = [0.2, 0 * fpm, self.psi_start]
+        self.u_0_ub = [0.5, 3500 * fpm, self.psi_start]
 
         # Control final - lower and upper bounds
-        self.u_f_lb = [cruise_mach, 0, -pi]
-        self.u_f_ub = [cruise_mach, 0, 3 * pi]
+        self.u_f_lb = [0.3, 0, psi_end - pi / 4]
+        self.u_f_ub = [mach_max, 3500 * fpm, psi_end + pi / 4]
 
         # Control - Lower and upper bound
-        self.u_lb = [0.1, 0 * fpm, -pi]
-        self.u_ub = [cruise_mach, 2500 * fpm, 3 * pi]
+        self.u_lb = [0.2, 0 * fpm, psi_end - 3 * pi / 2]
+        self.u_ub = [mach_max, 3500 * fpm, psi_end + 3 * pi / 2]
 
         # Control - guesses
-        self.u_guess = [0.2, 1500 * fpm, od_psi]
+        self.u_guess = [0.4, 2500 * fpm, self.psi_start]
 
     def trajectory(self, objective="fuel", df_cruise=None, **kwargs) -> pd.DataFrame:
-        if df_cruise is None:
-            if self.debug:
-                print("Finding the preliminary optimal cruise trajectory parameters...")
-            df_cruise = self.cruise.trajectory(objective)
+        df_cruise = kwargs.get("df_cruise", None)
+        h_end = kwargs.get("h_end", None)
+        mach_end = kwargs.get("mach_end", None)
+        trk_end = kwargs.get("trk_end", None)
+        trk_start = kwargs.get("trk_start", None)
+
+        customized_max_fuel = kwargs.get("max_fuel", None)
+
+        # if df_cruise is None and h_end is None and mach_end is None:
+        #     if self.debug:
+        #         print("Finding the preliminary optimal cruise trajectory parameters...")
+        #     df_cruise = self.cruise.trajectory(objective)
+
+        # if df_cruise is not None:
+        #     h_end = df_cruise.h.iloc[0]
+        #     mach_end = df_cruise.mach.iloc[0]
+        #     trk_end = df_cruise.heading.iloc[0]
+
+        # assert h_end is not None and mach_end is not None
+
+        self.init_conditions(**kwargs)
 
         if self.debug:
             print("Calculating optimal climbing trajectory...")
 
-        self.init_conditions(df_cruise)
         self.init_model(objective, **kwargs)
 
         C, D, B = self.collocation_coeff()
@@ -137,8 +186,12 @@ class Climb(Base):
                 Xkj = ca.MX.sym("X_" + str(k) + "_" + str(j), nstates)
                 Xc.append(Xkj)
                 w.append(Xkj)
-                lbw.append(self.x_lb)
-                ubw.append(self.x_ub)
+                if k == 1:
+                    lbw.append(self.x_1_lb)
+                    ubw.append(self.x_1_ub)
+                else:
+                    lbw.append(self.x_lb)
+                    ubw.append(self.x_ub)
                 w0.append(self.x_guess[k])
 
             # Loop over collocation points
@@ -167,7 +220,10 @@ class Climb(Base):
             w.append(Xk)
             X.append(Xk)
 
-            if k < self.nodes - 1:
+            if k == 1:
+                lbw.append(self.x_1_lb)
+                ubw.append(self.x_1_ub)
+            elif k < self.nodes - 1 and k != 1:
                 # normal boundary conditions
                 lbw.append(self.x_lb)
                 ubw.append(self.x_ub)
@@ -188,23 +244,17 @@ class Climb(Base):
         ubw.append([ca.inf])
         w0.append([3600])
 
-        # smooth Mach number changes
-        for k in range(1, self.nodes):
-            g.append(U[k][0] - U[k - 1][0])
-            lbg.append([-0.05])
-            ubg.append([0.05])
-
         # total energy model
         for k in range(self.nodes - 1):
             hk = X[k][2]
             hk1 = X[k + 1][2]
             vs = U[k][1]
-            vk = oc.aero.mach2tas(U[k][0], hk, self.dT)
-            vk1 = oc.aero.mach2tas(U[k + 1][0], hk1, self.dT)
+            vk = oc.aero.mach2tas(U[k][0], hk,  dT = self.dT)
+            vk1 = oc.aero.mach2tas(U[k + 1][0], hk1,  dT = self.dT)
             dvdt = (vk1 - vk) / self.dt
             dhdt = (hk1 - hk) / self.dt
             thrust_max = self.thrust.climb(0, hk / ft, 0, dT = self.dT)
-            drag = self.drag.clean(X[k][3], vk / kts, hk / ft,dT = self.dT)
+            drag = self.drag.clean(X[k][3], vk / kts, hk / ft, dT = self.dT)
             g.append((thrust_max - drag) / X[k][3] - oc.aero.g0 / vk * dhdt - dvdt)
             lbg.append([0])
             ubg.append([ca.inf])
@@ -215,6 +265,12 @@ class Climb(Base):
             lbg.append([-1])
             ubg.append([1])
 
+        # smooth Mach number changes
+        for k in range(1, self.nodes):
+            g.append(U[k][0] - U[k - 1][0])
+            lbg.append([-0.1])
+            ubg.append([0.1])
+
         # smooth vertical rate changes
         for k in range(1, self.nodes):
             g.append(U[k][1] - U[k - 1][1])
@@ -222,23 +278,44 @@ class Climb(Base):
             ubg.append([500 * fpm])
 
         # smooth heading changes
-        for k in range(1, self.nodes - 1):
+        for k in range(1, self.nodes):
+            # if k < 10:
+            #     g.append(U[k][2] - U[k - 1][2])
+            #     lbg.append([-10 * pi / 180])
+            #     ubg.append([10 * pi / 180])
+            # else:
             g.append(U[k][2] - U[k - 1][2])
             lbg.append([-5 * pi / 180])
             ubg.append([5 * pi / 180])
+        # for k in range(0,self.nodes//10):
+        #     g.append(U[k][2])
+        #     if k<=self.nodes//10:
+        #         lbg.append([self.psi_start-k*2 * pi / 180])
+        #         ubg.append([self.psi_start+k*2 * pi / 180])
+        #     else:
+        #         lbg.append([self.psi_start-k*10 * pi / 180])
+        #         ubg.append([self.psi_start+k*10 * pi / 180])
 
         # final position should be along the cruise trajectory
-        xp_1, yp_1 = df_cruise.x.iloc[0], df_cruise.y.iloc[0]
-        xp_2, yp_2 = df_cruise.x.iloc[1], df_cruise.y.iloc[1]
-        g.append((yp_2 - yp_1) / (xp_2 - xp_1) - (X[-1][1] - yp_1) / (X[-1][0] - xp_1))
-        lbg.append([0])
-        ubg.append([0])
+        if df_cruise is not None:
+            xp_1, yp_1 = df_cruise.x.iloc[0], df_cruise.y.iloc[0]
+            xp_2, yp_2 = df_cruise.x.iloc[1], df_cruise.y.iloc[1]
+            g.append(
+                (yp_2 - yp_1) / (xp_2 - xp_1) - (X[-1][1] - yp_1) / (X[-1][0] - xp_1)
+            )
+            lbg.append([0])
+            ubg.append([0])
 
-        # fixed range
-        xp_0, yp_0 = self.proj(self.lon1, self.lat1)
-        g.append(ca.sqrt((X[-1][0] - xp_0) ** 2 + (X[-1][1] - yp_0) ** 2))
-        lbg.append([self.traj_range])
-        ubg.append([self.traj_range])
+        # # fixed range
+        # xp_0, yp_0 = self.proj(self.lon1, self.lat1)
+        # g.append(ca.sqrt((X[-1][0] - xp_0) ** 2 + (X[-1][1] - yp_0) ** 2))
+        # lbg.append([self.traj_range])
+        # ubg.append([self.traj_range])
+
+        if customized_max_fuel is not None:
+            g.append(X[0][3] - X[-1][3] - customized_max_fuel)
+            lbg.append([-ca.inf])
+            ubg.append([0])
 
         # Concatenate vectors
         w = ca.vertcat(*w)
@@ -266,7 +343,5 @@ class Climb(Base):
         x_opt, u_opt = output(self.solution["x"])
 
         df = self.to_trajectory(ts_final, x_opt, u_opt)
-
-        df = df.query("vertical_rate > 100")
 
         return df
