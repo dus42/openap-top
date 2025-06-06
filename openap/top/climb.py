@@ -31,7 +31,7 @@ class Climb(Base):
 
         mass_0 = self.mass_init
         mass_oew = self.aircraft["limits"]["OEW"]
-        h_min = 100 * ft
+        h_min = 10_000 * ft
         h_toc = df_cruise.h.iloc[0]
         cruise_mach = df_cruise.mach.iloc[0]
         self.traj_range = self.wrap.climb_range()["maximum"] * 1000 * 1.5

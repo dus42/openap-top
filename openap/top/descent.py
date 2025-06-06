@@ -20,7 +20,7 @@ class Descent(Base):
     def init_conditions(self, df_cruise):
         """Initialize direct collocation bounds and guesses."""
 
-        h_min = 100 * ft
+        h_min = 10_000 * ft
         h_tod = df_cruise.h.iloc[-1]
         psi_tod = df_cruise.heading.iloc[-1] * pi / 180
         od_bearing = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
