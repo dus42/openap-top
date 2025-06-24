@@ -361,6 +361,7 @@ class CompleteFlight(Base):
 
         if not self.solver.stats()["success"]:
             warnings.warn("flight might be infeasible.")
+            df = None
 
         if df.altitude.max() < 5000:
             warnings.warn("max altitude < 5000 ft, optimization seems to have failed.")

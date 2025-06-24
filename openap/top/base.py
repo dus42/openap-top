@@ -223,7 +223,7 @@ class Base:
 
         dh = vs
 
-        dm = -self.fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT,limit=False)
+        dm = -self.fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT,limit=True)
 
         dt = 1
 
@@ -336,7 +336,7 @@ class Base:
             )
             v = openap.aero.mach2tas(mach, h, self.dT)
 
-        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT = self.dT,limit=False)
+        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT = self.dT,limit=True)
         co2 = emission.co2(ff)
         h2o = emission.h2o(ff)
         sox = emission.sox(ff)
@@ -361,7 +361,7 @@ class Base:
             )
             v = openap.aero.mach2tas(mach, h, self.dT)
 
-        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT,limit=False)
+        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT,limit=True)
         return ff * dt
 
     def obj_time(self, x, u, dt, **kwargs):
