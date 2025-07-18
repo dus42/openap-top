@@ -54,6 +54,7 @@ class Climb(Base):
         if runway_dir is None:
             psi_start=psi_end
         elif runway_dir < 90 and trk_end>270 :
+            psi_start = runway_dir * pi / 180
             psi_start = 2*pi + psi_start
         else:
             psi_start = runway_dir * pi / 180
