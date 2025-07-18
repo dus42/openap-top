@@ -2,7 +2,7 @@
 name = "openap-top"
 version = "1.7"
 description = "Trajectory OPtimizer based on OpenAP model"
-authors = [{ name = "Junzi Sun", email = "git@junzis.com" }]
+authors = [{ name = "Junzi Sun", email = "j.sun-1@tudelft.nl" }]
 license = { text = "GNU LGPL v3" }
 readme = "README.md"
 classifiers = [
@@ -36,7 +36,6 @@ dev-dependencies = [
     "flake8>=5.0.0",
     "black>=22.12.0",
     "isort>=5.11.4",
-    "ipykernel>=6.29.5",
     # "mypy>=0.991",
     # "pytest>=7.2.0",
 ]
