@@ -1,3 +1,4 @@
+import warnings
 from math import pi
 
 import casadi as ca
@@ -22,10 +23,10 @@ class Climb(Base):
         # Convert lat/lon to cartisian coordinates.
         xp_0, yp_0 = self.proj(self.lon1, self.lat1)
         xp_f, yp_f = self.proj(self.lon2, self.lat2)
-        x_min = min(xp_0, xp_f) - 10_000
-        x_max = max(xp_0, xp_f) + 10_000
-        y_min = min(yp_0, yp_f) - 10_000
-        y_max = max(yp_0, yp_f) + 10_000
+        x_min = min(xp_0, xp_f) - 30_000
+        x_max = max(xp_0, xp_f) + 30_000
+        y_min = min(yp_0, yp_f) - 30_000
+        y_max = max(yp_0, yp_f) + 30_000
 
         self.range = np.sqrt((xp_0 - xp_f) ** 2 + (yp_0 - yp_f) ** 2)
         h_end = kwargs.get("h_end", None)
@@ -271,13 +272,13 @@ class Climb(Base):
         if runway_dir is None:
             for k in range(1, self.nodes):
                 g.append((U[k][2] - U[k - 1][2]) / self.dt)
-                lbg.append([-1 * pi / 180])  # per second
-                ubg.append([1 * pi / 180])  # per second
+                lbg.append([-1.5 * pi / 180])  # per second
+                ubg.append([1.5 * pi / 180])  # per second
         else:
             for k in range(2, self.nodes):
                 g.append((U[k][2] - U[k - 1][2]) / self.dt)
-                lbg.append([-1 * pi / 180])  # per second
-                ubg.append([1 * pi / 180])  # per second
+                lbg.append([-1.5 * pi / 180])  # per second
+                ubg.append([1.5 * pi / 180])  # per second
             g.append((U[1][2] - U[0][2]) / self.dt)
             lbg.append([0 * pi / 180])  # per second
             ubg.append([0 * pi / 180])  # per second
@@ -320,7 +321,9 @@ class Climb(Base):
         self.solver = ca.nlpsol("solver", "ipopt", nlp, self.solver_options)
 
         self.solution = self.solver(x0=w0, lbx=lbw, ubx=ubw, lbg=lbg, ubg=ubg)
-
+        if not self.solver.stats()["success"]:
+            warnings.warn("optimization failed")
+            return None
         # final timestep
         ts_final = self.solution["x"][-1].full()[0][0]
 
