@@ -113,6 +113,9 @@ class Climb(Base):
         runway_dir = kwargs.get("runway_dir", None)
 
         customized_max_fuel = kwargs.get("max_fuel", None)
+        initial_guess = kwargs.get("initial_guess", None)
+        if initial_guess is not None:
+            self.x_guess = self.initial_guess(initial_guess)
 
         # if df_cruise is None and h_end is None and mach_end is None:
         #     if self.debug:
