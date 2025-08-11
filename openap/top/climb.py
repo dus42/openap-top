@@ -91,7 +91,7 @@ class Climb(Base):
 
         # Control init - lower and upper bounds
         self.u_0_lb = [0.2, 0 * fpm, psi_start]
-        self.u_0_ub = [0.3, 4000 * fpm, psi_start]
+        self.u_0_ub = [0.3, 3000 * fpm, psi_start]
 
         # Control final - lower and upper bounds
         self.u_f_lb = [mach_end_min, 0, psi_end - pi / 2]
@@ -285,6 +285,20 @@ class Climb(Base):
             g.append((U[1][2] - U[0][2]) / self.dt)
             lbg.append([0 * pi / 180])  # per second
             ubg.append([0 * pi / 180])  # per second
+        #new constraints for a320
+        for k in range(1, self.nodes):
+            if X[k][2]< 5000*oc.aero.ft:
+                g.append((oc.aero.mach2cas(U[k][0], X[k][2])))
+                lbg.append([175*0.5*oc.aero.kts])  
+                ubg.append([175*1.5*oc.aero.kts])  
+            elif X[k][2]> 5000*oc.aero.ft and X[k][2]< 24000*oc.aero.ft:
+                g.append((oc.aero.mach2cas(U[k][0], X[k][2])))
+                lbg.append([290*0.5*oc.aero.kts])  
+                ubg.append([290*1.5*oc.aero.kts])  
+            else:
+                g.append(U[k][1])
+                lbg.append([0*oc.aero.fpm])  
+                ubg.append([2000*oc.aero.fpm])  
 
         # final position should be along the cruise trajectory
         if df_cruise is not None:
