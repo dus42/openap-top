@@ -286,6 +286,13 @@ class Climb(Base):
             lbg.append([0 * pi / 180])  # per second
             ubg.append([0 * pi / 180])  # per second
 
+        # cas constraint with 10%vmo margin
+        for k in range(self.nodes):
+            cas = oc.aero.mach2cas(U[k][0], X[k][2], dT=self.dT)
+            cas_max = self.aircraft["vmo"] * kts * 1.1
+            g.append(cas)
+            lbg.append([0])
+            ubg.append([cas_max])
 
         # final position should be along the cruise trajectory
         if df_cruise is not None:

@@ -249,7 +249,7 @@ class Base:
         else:
             self.nodes = int(self.range / 50_000)  # node every 50km
 
-        max_nodes = kwargs.get("max_nodes", 120)
+        max_nodes = kwargs.get("max_nodes", 150)
 
         self.nodes = max(20, self.nodes)
         self.nodes = min(max_nodes, self.nodes)
