@@ -91,15 +91,15 @@ class Climb(Base):
 
         # Control init - lower and upper bounds
         self.u_0_lb = [0.2, 0 * fpm, psi_start]
-        self.u_0_ub = [0.3, 3000 * fpm, psi_start]
+        self.u_0_ub = [0.3, 2500 * fpm, psi_start]
 
         # Control final - lower and upper bounds
         self.u_f_lb = [mach_end_min, 0, psi_end - pi / 2]
-        self.u_f_ub = [mach_end_max, 4000 * fpm, psi_end + pi / 2]
+        self.u_f_ub = [mach_end_max, 3500 * fpm, psi_end + pi / 2]
 
         # Control - Lower and upper bound
         self.u_lb = [0.1, 0 * fpm, psi_end - 2 * pi]
-        self.u_ub = [mach_max, 4000 * fpm, psi_end + 2 * pi]
+        self.u_ub = [mach_max, 3500 * fpm, psi_end + 2 * pi]
 
         # Control - guesses
         self.u_0_guess = [0.3, 1500 * fpm, psi_start]
