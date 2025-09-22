@@ -46,9 +46,11 @@ class Climb(Base):
         else:
             mach_end_min = mach_end - 0.01
             mach_end_max = mach_end + 0.01
-        trk_end = kwargs.get(
-            "trk_end", oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
-        )
+        trk_end_0 = kwargs.get("trk_end", None)
+        if trk_end_0 is None:
+            trk_end = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
+        else:
+            trk_end = trk_end_0
         psi_end = trk_end * pi / 180
         runway_dir = kwargs.get("runway_dir", None)
 
@@ -94,12 +96,16 @@ class Climb(Base):
         self.u_0_ub = [0.3, 2500 * fpm, psi_start]
 
         # Control final - lower and upper bounds
-        self.u_f_lb = [mach_end_min, 0, psi_end - pi / 2]
-        self.u_f_ub = [mach_end_max, 3500 * fpm, psi_end + pi / 2]
+        if trk_end_0 is None:
+            self.u_f_lb = [mach_end_min, 0, psi_end - pi / 2]
+            self.u_f_ub = [mach_end_max, 3500 * fpm, psi_end + pi / 2]
+        else:
+            self.u_f_lb = [mach_end_min, 0, psi_end]
+            self.u_f_ub = [mach_end_max, 3000 * fpm, psi_end]
 
         # Control - Lower and upper bound
         self.u_lb = [0.1, 0 * fpm, psi_end - 2 * pi]
-        self.u_ub = [mach_max, 3500 * fpm, psi_end + 2 * pi]
+        self.u_ub = [mach_max, 3000 * fpm, psi_end + 2 * pi]
 
         # Control - guesses
         self.u_0_guess = [0.3, 1500 * fpm, psi_start]
