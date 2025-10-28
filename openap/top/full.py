@@ -63,7 +63,7 @@ class CompleteFlight(Base):
         h_min = 100 * ft
         # convert h_max to the corresponding pressure when dT != 0
         if self.dT != 0:
-            p = ca.pressure(h=h_max)
+            p = oc.aero.pressure(h=h_max)
             h_max = 11000 + np.log(p / 22632) / (-157.69 * 10 ** (-6))
         hdg = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
         psi = hdg * pi / 180
