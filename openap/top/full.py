@@ -66,9 +66,7 @@ class CompleteFlight(Base):
             p = oc.aero.pressure(h=h_max)
             p11 = oc.aero.pressure(h=11000, dT=self.dT)
             T11 = oc.aero.temperature(h=11000, dT=self.dT)
-            print(h_max)
             h_max = 11000 + np.log(p / p11) / (-oc.aero.g0 / oc.aero.R / T11)
-            print("NEW:", h_max)
         hdg = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
         psi = hdg * pi / 180
 
