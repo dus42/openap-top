@@ -58,6 +58,7 @@ class Base:
         self.mlw = self.aircraft["mlw"]
         self.fuel_max = self.aircraft["mfc"]
         self.mach_max = self.aircraft["mmo"]
+        self.cas_max = self.aircraft["vmo"]
         self.dT = dT
 
         self.use_synonym = use_synonym
@@ -215,22 +216,22 @@ class Base:
             ca.MX: State direvatives
         """
         xp, yp, h, m, ts = x[0], x[1], x[2], x[3], x[4]
-        mach, vs, psi = u[0], u[1], u[2]
+        v_tas, vs, psi = u[0], u[1], u[2]
 
-        v = oc.aero.mach2tas(mach, h, dT=self.dT)
-        gamma = ca.arctan2(vs, v)
+        # v = oc.aero.mach2tas(mach, h, dT=self.dT)
+        gamma = ca.arctan2(vs, v_tas)
 
-        dx = v * ca.sin(psi) * ca.cos(gamma)
+        dx = v_tas * ca.sin(psi) * ca.cos(gamma)
         if self.wind is not None:
             dx += self.wind.calc_u(xp, yp, h, ts)
 
-        dy = v * ca.cos(psi) * ca.cos(gamma)
+        dy = v_tas * ca.cos(psi) * ca.cos(gamma)
         if self.wind is not None:
             dy += self.wind.calc_v(xp, yp, h, ts)
 
         dh = vs
 
-        dm = -self.fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT)
+        dm = -self.fuelflow.enroute(m, v_tas / kts, h / ft, vs / fpm, dT=self.dT)
 
         dt = 1
 
@@ -297,12 +298,12 @@ class Base:
         m = ca.MX.sym("m")
         ts = ca.MX.sym("ts")
 
-        mach = ca.MX.sym("mach")
+        v_tas = ca.MX.sym("v_tas")
         vs = ca.MX.sym("vs")
         psi = ca.MX.sym("psi")
 
         self.x = ca.vertcat(xp, yp, h, m, ts)
-        self.u = ca.vertcat(mach, vs, psi)
+        self.u = ca.vertcat(v_tas, vs, psi)
 
         self.ts_final = ca.MX.sym("ts_final")
 
@@ -340,12 +341,12 @@ class Base:
 
     def _calc_emission(self, x, u, symbolic=True):
         xp, yp, h, m = x[0], x[1], x[2], x[3]
-        mach, vs, psi = u[0], u[1], u[2]
+        v_tas, vs, psi = u[0], u[1], u[2]
 
         if symbolic:
             fuelflow = self.fuelflow
             emission = self.emission
-            v = oc.aero.mach2tas(mach, h, dT=self.dT)
+            # v = oc.aero.mach2tas(mach, h, dT=self.dT)
         else:
             fuelflow = openap.FuelFlow(
                 self.actype, self.engtype, polydeg=2, use_synonym=self.use_synonym
@@ -353,24 +354,24 @@ class Base:
             emission = openap.Emission(
                 self.actype, self.engtype, use_synonym=self.use_synonym
             )
-            v = openap.aero.mach2tas(mach, h, dT=self.dT)
+            # v = openap.aero.mach2tas(mach, h, dT=self.dT)
 
-        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT)
+        ff = fuelflow.enroute(m, v_tas / kts, h / ft, vs / fpm, dT=self.dT)
         co2 = emission.co2(ff)
         h2o = emission.h2o(ff)
         sox = emission.sox(ff)
         soot = emission.soot(ff)
-        nox = emission.nox(ff, v / kts, h / ft, dT=self.dT)
+        nox = emission.nox(ff, v_tas / kts, h / ft, dT=self.dT)
 
         return co2, h2o, sox, soot, nox
 
     def obj_fuel(self, x, u, dt, symbolic=True, **kwargs):
         xp, yp, h, m, ts = x[0], x[1], x[2], x[3], x[4]
-        mach, vs, psi = u[0], u[1], u[2]
+        v_tas, vs, psi = u[0], u[1], u[2]
 
         if symbolic:
             fuelflow = self.fuelflow
-            v = oc.aero.mach2tas(mach, h, dT=self.dT)
+            # v = oc.aero.mach2tas(mach, h, dT=self.dT)
         else:
             fuelflow = openap.FuelFlow(
                 self.actype,
@@ -378,9 +379,9 @@ class Base:
                 use_synonym=self.use_synonym,
                 force_engine=True,
             )
-            v = openap.aero.mach2tas(mach, h, dT=self.dT)
+            # v = openap.aero.mach2tas(mach, h, dT=self.dT)
 
-        ff = fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT)
+        ff = fuelflow.enroute(m, v_tas / kts, h / ft, vs / fpm, dT=self.dT)
         return ff * dt
 
     def obj_time(self, x, u, dt, **kwargs):
@@ -543,11 +544,16 @@ class Base:
         self.dt = ts_final / (n - 1)
 
         xp, yp, h, mass, ts = X
-        mach, vs, psi = U
+        v_tas, vs, psi = U
         lon, lat = self.proj(xp, yp, inverse=True)
         ts_ = np.linspace(0, ts_final, n).round(4)
-        tas = (openap.aero.mach2tas(mach, h, dT=self.dT) / kts).round(4)
-        alt = (h / ft).round()
+        # tas = (openap.aero.mach2tas(mach, h, dT=self.dT) / kts).round(4)
+        tas = v_tas / kts
+        mach = openap.aero.tas2mach(v_tas, h, dT=self.dT)
+        p = openap.aero.pressure(h)
+        alt = openap.aero.h_isa(p) / ft
+        # alt = (h / ft).round()
+
         vertrate = (vs / fpm).round()
 
         df = pd.DataFrame(

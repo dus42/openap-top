@@ -63,14 +63,16 @@ class CompleteFlight(Base):
         h_min = 100 * ft
         # convert h_max to the corresponding pressure when dT != 0
         if self.dT != 0:
+            htrop = 11000 + 1000 * self.dT / 6.5
             p = oc.aero.pressure(h=h_max)
-            p11 = oc.aero.pressure(h=11000, dT=self.dT)
-            T11 = oc.aero.temperature(h=11000, dT=self.dT)
-            h_max = 11000 + np.log(p / p11) / (-oc.aero.g0 / oc.aero.R / T11)
+            ptrop = oc.aero.pressure(h=htrop, dT=self.dT)
+            Ttrop = oc.aero.temperature(h=htrop, dT=self.dT)
+            h_max = htrop + np.log(p / ptrop) / (-oc.aero.g0 / oc.aero.R / Ttrop)
+
         hdg = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
         psi = hdg * pi / 180
 
-        # Initial conditions - Lower upper bounds
+        # Initial conditions - Lower upper bounds [x, y, h, m, ts]
         self.x_0_lb = [xp_0, yp_0, h_min, self.mass_init, ts_min]
         self.x_0_ub = [xp_0, yp_0, h_min, self.mass_init, ts_min]
 
@@ -82,23 +84,23 @@ class CompleteFlight(Base):
         self.x_lb = [x_min, y_min, h_min, self.oew * 0.5, ts_min]
         self.x_ub = [x_max, y_max, h_max, self.mass_init, ts_max]
 
-        # Control init - lower and upper bounds
-        self.u_0_lb = [0.1, 500 * fpm, psi]
-        self.u_0_ub = [0.3, 2500 * fpm, psi]
+        # Control init - lower and upper bounds [v_tas, vs, psi]
+        self.u_0_lb = [50, 500 * fpm, psi]
+        self.u_0_ub = [250, 3500 * fpm, psi]
 
         # Control final - lower and upper bounds
-        self.u_f_lb = [0.1, -1500 * fpm, psi]
-        self.u_f_ub = [0.3, -300 * fpm, psi]
+        self.u_f_lb = [50, -1500 * fpm, psi]
+        self.u_f_ub = [250, -300 * fpm, psi]
 
         # Control - Lower and upper bound
-        self.u_lb = [0.1, -2500 * fpm, psi - pi / 2]
-        self.u_ub = [self.mach_max, 2500 * fpm, psi + pi / 2]
+        self.u_lb = [50, -3000 * fpm, psi - pi / 2]
+        self.u_ub = [600, 3000 * fpm, psi + pi / 2]
 
         # Initial guess for the states
         self.x_guess = self.initial_guess()
 
         # Control - guesses
-        self.u_guess = [0.6, 1000 * fpm, psi]
+        self.u_guess = [150, 1000 * fpm, psi]
 
     def trajectory(self, objective="fuel", **kwargs) -> pd.DataFrame:
         """
@@ -271,7 +273,8 @@ class CompleteFlight(Base):
             cd0 = self.drag.polar["clean"]["cd0"]
             ck = self.drag.polar["clean"]["k"]
             mass = X[k][3]
-            v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
+            # v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
+            v = U[k][0]
             tas = v / kts
             alt = X[k][2] / ft
             rho = oc.aero.density(X[k][2], dT=self.dT)
@@ -306,23 +309,50 @@ class CompleteFlight(Base):
             lbg.append([-1])
             ubg.append([1])
 
-        # smooth Mach number change
-        for k in range(self.nodes - 1):
-            g.append(U[k + 1][0] - U[k][0])
-            lbg.append([-0.2])
-            ubg.append([0.2])  # to be tunned
+        # # smooth v_tas number change
+        # for k in range(self.nodes - 1):
+        #     g.append(U[k + 1][0] - U[k][0])
+        #     lbg.append([-100])
+        #     ubg.append([100])  # to be tunned
 
         # smooth vertical rate change
         for k in range(self.nodes - 1):
-            g.append(U[k + 1][1] - U[k][1])
-            lbg.append([-500 * fpm])
-            ubg.append([500 * fpm])  # to be tunned
+            g.append((U[k + 1][1] - U[k][1]) / self.dt)
+            lbg.append([-12 * fpm])
+            ubg.append([12 * fpm])  # to be tunned
+
+        # mach constraint
+        for k in range(self.nodes):
+            mach_k = oc.aero.tas2mach(U[k][0], X[k][2], dT=self.dT)
+            if k == 0 or k == (self.nodes - 1):
+                g.append(mach_k)
+                lbg.append([0.1])
+                ubg.append([0.3])
+            else:
+                g.append(mach_k)
+                lbg.append([0.1])
+                ubg.append([self.mach_max])
+
+        # cas constraint
+        for k in range(self.nodes):
+            cas = oc.aero.tas2cas(U[k][0], X[k][2], dT=self.dT)
+            g.append(cas)
+            lbg.append([0])
+            ubg.append([self.cas_max * kts])
 
         # smooth heading change
         for k in range(self.nodes - 1):
-            g.append(U[k + 1][2] - U[k][2])
-            lbg.append([-15 * pi / 180])
-            ubg.append([15 * pi / 180])
+            g.append((U[k + 1][2] - U[k][2]) / self.dt)
+            lbg.append([-1.5 * pi / 180])
+            ubg.append([1.5 * pi / 180])
+
+        # # smooth cas change
+        # for k in range(1, self.nodes):
+        #     cask = oc.aero.mach2cas(U[k][0], X[k][2], dT=self.dT)
+        #     cask1 = oc.aero.mach2cas(U[k - 1][0], X[k - 1][2], dT=self.dT)
+        #     g.append((cask - cask1) / self.dt)
+        #     lbg.append([-1])  # per second
+        #     ubg.append([1])  # per second
 
         # add fuel constraint
         g.append(X[0][3] - X[-1][3])
