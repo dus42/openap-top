@@ -84,23 +84,23 @@ class CompleteFlight(Base):
         self.x_lb = [x_min, y_min, h_min, self.oew * 0.5, ts_min]
         self.x_ub = [x_max, y_max, h_max, self.mass_init, ts_max]
 
-        # Control init - lower and upper bounds [v_tas, vs, psi]
-        self.u_0_lb = [50, 500 * fpm, psi]
-        self.u_0_ub = [250, 3500 * fpm, psi]
+        # Control init - lower and upper bounds [v_tas, gamma, psi]
+        self.u_0_lb = [0, pi / 72, psi]
+        self.u_0_ub = [300, pi / 6, psi]
 
         # Control final - lower and upper bounds
-        self.u_f_lb = [50, -1500 * fpm, psi]
-        self.u_f_ub = [250, -300 * fpm, psi]
+        self.u_f_lb = [0, -pi / 6, psi]
+        self.u_f_ub = [300, -pi / 72, psi]
 
         # Control - Lower and upper bound
-        self.u_lb = [50, -3000 * fpm, psi - pi / 2]
-        self.u_ub = [600, 3000 * fpm, psi + pi / 2]
+        self.u_lb = [0, -pi / 6, psi - pi / 2]
+        self.u_ub = [300, pi / 6, psi + pi / 2]
 
         # Initial guess for the states
         self.x_guess = self.initial_guess()
 
         # Control - guesses
-        self.u_guess = [150, 1000 * fpm, psi]
+        self.u_guess = [150, pi / 72, psi]
 
     def trajectory(self, objective="fuel", **kwargs) -> pd.DataFrame:
         """
@@ -245,10 +245,11 @@ class CompleteFlight(Base):
             max_descent_range = 300_000
             idx_toc = int(max_climb_range / dd)
             idx_tod = int((self.range - max_descent_range) / dd)
-
+            vs = U[k][0] * ca.sin(U[k][1] * 180 / np.pi)
             for k in range(idx_toc, idx_tod):
                 # minimum avoid large changes in altitude
-                g.append(U[k][1])
+                vs = U[k][0] * ca.sin(U[k][1] * 180 / np.pi)
+                g.append(vs)
                 lbg.append([-500 * fpm])
                 ubg.append([500 * fpm])
 
@@ -258,12 +259,14 @@ class CompleteFlight(Base):
                 ubg.append([ca.inf])
 
             for k in range(0, idx_toc):
-                g.append(U[k][1])
+                vs = U[k][0] * ca.sin(U[k][1] * 180 / np.pi)
+                g.append(vs)
                 lbg.append([0])
                 ubg.append([ca.inf])
 
             for k in range(idx_tod, self.nodes):
-                g.append(U[k][1])
+                vs = U[k][0] * ca.sin(U[k][1] * 180 / np.pi)
+                g.append(vs)
                 lbg.append([-ca.inf])
                 ubg.append([0])
 
@@ -276,6 +279,7 @@ class CompleteFlight(Base):
             # v = oc.aero.mach2tas(U[k][0], X[k][2], dT=self.dT)
             v = U[k][0]
             tas = v / kts
+            vs = v * ca.sin(U[k][1] * 180 / np.pi)
             alt = X[k][2] / ft
             rho = oc.aero.density(X[k][2], dT=self.dT)
             thrust_max = self.thrust.cruise(tas, alt, dT=self.dT)
@@ -298,7 +302,7 @@ class CompleteFlight(Base):
             ubg.append([ca.inf])
 
             # excess energy > change potential energy
-            excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * U[k][1]
+            excess_energy = (thrust_max - drag) * v - mass * oc.aero.g0 * vs
             g.append(excess_energy)
             lbg.append([0])
             ubg.append([ca.inf])
@@ -315,9 +319,17 @@ class CompleteFlight(Base):
         #     lbg.append([-100])
         #     ubg.append([100])  # to be tunned
 
+        # # smooth vertical rate change
+        # for k in range(self.nodes - 1):
+        #     g.append((U[k + 1][1] - U[k][1]) / self.dt)
+        #     lbg.append([-12 * fpm])
+        #     ubg.append([12 * fpm])  # to be tunned
+
         # smooth vertical rate change
         for k in range(self.nodes - 1):
-            g.append((U[k + 1][1] - U[k][1]) / self.dt)
+            vs_k = U[k][0] * ca.sin(U[k][1] * 180 / np.pi)
+            vs_k1 = U[k + 1][0] * ca.sin(U[k + 1][1] * 180 / np.pi)
+            g.append((vs_k1 - vs_k) / self.dt)
             lbg.append([-12 * fpm])
             ubg.append([12 * fpm])  # to be tunned
 
@@ -332,6 +344,13 @@ class CompleteFlight(Base):
                 g.append(mach_k)
                 lbg.append([0.1])
                 ubg.append([self.mach_max])
+
+        # vs constraint
+        for k in range(self.nodes):
+            vs_k = U[k][0] * ca.sin(U[k][1] * 180 / np.pi)
+            g.append(vs_k)
+            lbg.append([-3500 * fpm])
+            ubg.append([3500 * fpm])
 
         # cas constraint
         for k in range(self.nodes):

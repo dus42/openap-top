@@ -210,16 +210,17 @@ class Base:
 
         Args:
             x (ca.MX): States [x position (m), y position (m), height (m), mass (kg)]
-            u (ca.MX): Controls [mach number, vertical speed (m/s), heading (rad)]
+            u (ca.MX): Controls [v_tas (m/s), gamma (rad), heading (rad)]
 
         Returns:
             ca.MX: State direvatives
         """
         xp, yp, h, m, ts = x[0], x[1], x[2], x[3], x[4]
-        v_tas, vs, psi = u[0], u[1], u[2]
+        v_tas, gamma, psi = u[0], u[1], u[2]
 
         # v = oc.aero.mach2tas(mach, h, dT=self.dT)
-        gamma = ca.arctan2(vs, v_tas)
+        # gamma = ca.arctan2(vs, v_tas)
+        vs = v_tas * ca.sin(gamma * 180 / np.pi)
 
         dx = v_tas * ca.sin(psi) * ca.cos(gamma)
         if self.wind is not None:
@@ -299,11 +300,11 @@ class Base:
         ts = ca.MX.sym("ts")
 
         v_tas = ca.MX.sym("v_tas")
-        vs = ca.MX.sym("vs")
+        gamma = ca.MX.sym("gamma")
         psi = ca.MX.sym("psi")
 
         self.x = ca.vertcat(xp, yp, h, m, ts)
-        self.u = ca.vertcat(v_tas, vs, psi)
+        self.u = ca.vertcat(v_tas, gamma, psi)
 
         self.ts_final = ca.MX.sym("ts_final")
 
@@ -341,8 +342,8 @@ class Base:
 
     def _calc_emission(self, x, u, symbolic=True):
         xp, yp, h, m = x[0], x[1], x[2], x[3]
-        v_tas, vs, psi = u[0], u[1], u[2]
-
+        v_tas, gamma, psi = u[0], u[1], u[2]
+        vs = v_tas * ca.sin(gamma * 180 / np.pi)
         if symbolic:
             fuelflow = self.fuelflow
             emission = self.emission
@@ -367,8 +368,8 @@ class Base:
 
     def obj_fuel(self, x, u, dt, symbolic=True, **kwargs):
         xp, yp, h, m, ts = x[0], x[1], x[2], x[3], x[4]
-        v_tas, vs, psi = u[0], u[1], u[2]
-
+        v_tas, gamma, psi = u[0], u[1], u[2]
+        vs = v_tas * ca.sin(gamma * 180 / np.pi)
         if symbolic:
             fuelflow = self.fuelflow
             # v = oc.aero.mach2tas(mach, h, dT=self.dT)
@@ -456,7 +457,7 @@ class Base:
 
         Parameters:
         x (ca.MX): State vector [xp, yp, h, m, ts].
-        u (ca.MX): Control vector [mach, vs, psi].
+        u (ca.MX): Control vector [v_tas gamma, psi].
         dt (ca.MX): Time step.
 
         **kwargs (dict): Additional keyword arguments.
@@ -544,7 +545,8 @@ class Base:
         self.dt = ts_final / (n - 1)
 
         xp, yp, h, mass, ts = X
-        v_tas, vs, psi = U
+        v_tas, gamma, psi = U
+        vs = v_tas * np.sin(gamma * 180 / np.pi)
         lon, lat = self.proj(xp, yp, inverse=True)
         ts_ = np.linspace(0, ts_final, n).round(4)
         # tas = (openap.aero.mach2tas(mach, h, dT=self.dT) / kts).round(4)
