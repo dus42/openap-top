@@ -63,7 +63,12 @@ class CompleteFlight(Base):
         h_min = 100 * ft
         # convert h_max to the corresponding pressure when dT != 0
         if self.dT != 0:
-            htrop = 11000  # + 1000 * self.dT / 6.5
+            p_trop_isa = 22631.91
+            T0_shift = 288.15 + self.dT
+            htrop = (
+                (p_trop_isa / openap.aero.p0) ** (1 / 5.2559) * T0_shift - T0_shift
+            ) / -0.0065
+            # htrop = 11000  # + 1000 * self.dT / 6.5
             p = oc.aero.pressure(h=h_max)
             ptrop = oc.aero.pressure(h=htrop, dT=self.dT)
             Ttrop = oc.aero.temperature(h=htrop, dT=self.dT)
