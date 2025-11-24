@@ -74,7 +74,7 @@ class CompleteFlight(Base):
             T = T0 + self.dT + beta * htrop
             rho = p / R / T
             h_max = 11000 - R * T11 / g0 * np.log(rho / rho11)
-            print(h_max_p, h_max_g, h_max)
+            # print(h_max_p, h_max_g, h_max)
 
         hdg = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
         psi = hdg * pi / 180
