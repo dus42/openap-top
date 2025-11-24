@@ -7,7 +7,7 @@ import numpy as np
 import openap
 import openap.casadi as oc
 import pandas as pd
-from openap.extra.aero import fpm, ft, kts
+from openap.extra.aero import fpm, ft, kts, beta, R, g0, p0, T0
 
 from .base import Base
 from .climb import Climb
@@ -63,16 +63,18 @@ class CompleteFlight(Base):
         h_min = 100 * ft
         # convert h_max to the corresponding pressure when dT != 0
         if self.dT != 0:
-            p_trop_isa = 22631.91
-            T0_shift = 288.15 + self.dT
-            htrop = (
-                (p_trop_isa / openap.aero.p0) ** (1 / 5.2559) * T0_shift - T0_shift
-            ) / -0.0065
-            # htrop = 11000  # + 1000 * self.dT / 6.5
-            p = oc.aero.pressure(h=h_max)
-            ptrop = oc.aero.pressure(h=htrop, dT=self.dT)
-            Ttrop = oc.aero.temperature(h=htrop, dT=self.dT)
-            h_max = htrop + np.log(p / ptrop) / (-oc.aero.g0 / oc.aero.R / Ttrop)
+            p_trop_isa = openap.aero.pressure(11000)
+            htrop = 11000 - R * self.dT / g0 * np.log(p_trop_isa / p0)
+            T11 = openap.aero.temperature(11000)
+            rho11 = openap.aero.density(11000)
+            h_max_p = h_max
+            # h_max = htrop + (h_max - 11000) * (1 + self.dT / (T0 + beta * htrop))
+            p = openap.aero.pressure(h_max_p)
+            h_max_g = h_max_p - R * self.dT / g0 * np.log(p / p0)
+            T = T0 + self.dT + beta * htrop
+            rho = p / R / T
+            h_max = 11000 - R * T11 / g0 * np.log(rho / rho11)
+            print(h_max_p, h_max_g, h_max)
 
         hdg = oc.aero.bearing(self.lat1, self.lon1, self.lat2, self.lon2)
         psi = hdg * pi / 180
