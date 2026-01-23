@@ -1,5 +1,5 @@
 import warnings
-from typing import Callable, Union
+from typing import Callable, List, Dict
 
 import casadi as ca
 import openap.casadi as oc
@@ -18,12 +18,9 @@ except Exception:
 class Base:
     def __init__(
         self,
-        actype: str,
-        origin: Union[str, tuple],
-        destination: Union[str, tuple],
-        m0: float = 0.8,
+        scenarios: List[Dict],
         dT: float = 0.0,
-        use_synonym=False,
+        use_synonym: bool = False,
     ):
         """OpenAP trajectory optimizer.
 
@@ -34,39 +31,47 @@ class Base:
             m0 (float, optional): Takeoff mass factor. Defaults to 0.8 (of MTOW).
             dT (float, optional): Temperature shift from standard ISA. Default = 0
         """
-        if isinstance(origin, str):
-            ap1 = openap.nav.airport(origin)
-            self.lat1, self.lon1 = ap1["lat"], ap1["lon"]
-        else:
-            self.lat1, self.lon1 = origin
-
-        if isinstance(destination, str):
-            ap2 = openap.nav.airport(destination)
-            self.lat2, self.lon2 = ap2["lat"], ap2["lon"]
-        else:
-            self.lat2, self.lon2 = destination
-
-        self.actype = actype
-        self.aircraft = oc.prop.aircraft(self.actype, use_synonym=use_synonym)
-        self.engtype = self.aircraft["engine"]["default"]
-        self.engine = oc.prop.engine(self.aircraft["engine"]["default"])
-
-        self.mass_init = m0 * self.aircraft["mtow"]
-        self.oew = self.aircraft["oew"]
-        self.mlw = self.aircraft["mlw"]
-        self.fuel_max = self.aircraft["mfc"]
-        self.mach_max = self.aircraft["mmo"]
         self.dT = dT
-
         self.use_synonym = use_synonym
+        self.scenarios = scenarios
+        self.lat0 = None
+        self.lon0 = None
 
-        self.thrust = oc.Thrust(actype, use_synonym=self.use_synonym)
-        self.wrap = openap.WRAP(actype, use_synonym=self.use_synonym)
-        self.drag = oc.Drag(actype, wave_drag=True, use_synonym=self.use_synonym)
-        self.fuelflow = oc.FuelFlow(
-            actype, wave_drag=True, use_synonym=self.use_synonym
-        )
-        self.emission = oc.Emission(actype, use_synonym=self.use_synonym)
+        for sc in self.scenarios:
+            actype = sc["actype"]
+            if isinstance(sc["origin"], str):
+                ap1 = openap.nav.airport(sc["origin"])
+                sc["lat1"], sc["lon1"] = ap1["lat"], ap1["lon"]
+            else:
+                sc["lat1"], sc["lon1"] = sc["origin"]
+
+            if isinstance(sc["destination"], str):
+                ap1 = openap.nav.airport(sc["destination"])
+                sc["lat2"], sc["lon2"] = ap1["lat"], ap1["lon"]
+            else:
+                sc["lat2"], sc["lon2"] = sc["destination"]
+            if self.lat0 is None:
+                self.lat0 = (sc["lat1"] + sc["lat2"]) / 2
+                self.lon0 = (sc["lon1"] + sc["lon2"]) / 2
+            else:
+                self.lat0 = ((sc["lat1"] + sc["lat2"]) / 2 + self.lat0) / 2
+                self.lon0 = ((sc["lon1"] + sc["lon2"]) / 2 + self.lon0) / 2
+            sc["aircraft"] = oc.prop.aircraft(actype, use_synonym=use_synonym)
+            sc["engtype"] = sc["aircraft"]["engine"]["default"]
+            sc["engine"] = oc.prop.engine(sc["engtype"])
+            sc["mass_init"] = sc.get("m0", 0.8) * sc["aircraft"]["mtow"]
+            sc["oew"] = sc["aircraft"]["oew"]
+            sc["mlw"] = sc["aircraft"]["mlw"]
+            sc["fuel_max"] = sc["aircraft"]["mfc"]
+            sc["mach_max"] = sc["aircraft"]["mmo"]
+
+            sc["thrust"] = oc.Thrust(actype, use_synonym=use_synonym)
+            sc["wrap"] = openap.WRAP(actype, use_synonym=use_synonym)
+            sc["drag"] = oc.Drag(actype, wave_drag=True, use_synonym=use_synonym)
+            sc["fuelflow"] = oc.FuelFlow(
+                actype, wave_drag=True, use_synonym=use_synonym
+            )
+            sc["emission"] = oc.Emission(actype, use_synonym=use_synonym)
 
         # from pyproj import Proj
         # self.proj = Proj(
@@ -78,20 +83,24 @@ class Base:
         #     lon_0=(self.lon1 + self.lon2) / 2,
         # )
 
-        self.wind = None
-
         # Check cruise range
-        self.range = oc.aero.distance(self.lat1, self.lon1, self.lat2, self.lon2)
-        max_range = self.wrap.cruise_range()["maximum"] * 1.2
-        if self.range > max_range * 1000:
-            warnings.warn("The destination is likely out of maximum cruise range.")
+        for sc in self.scenarios:
+            sc["wind"] = None
+            sc["range"] = oc.aero.distance(
+                sc["lat1"], sc["lon1"], sc["lat2"], sc["lon2"]
+            )
 
-        self.debug = False
-        self.setup()
+            max_range = sc["wrap"].cruise_range()["maximum"] * 1.2
+            if sc["range"] > max_range * 1000:
+                warnings.warn(f"{sc['actype']} destination likely out of cruise range")
+
+            sc["debug"] = False
+
+            self.setup(sc)
 
     def proj(self, lon, lat, inverse=False, symbolic=False):
-        lat0 = (self.lat1 + self.lat2) / 2
-        lon0 = (self.lon1 + self.lon2) / 2
+        lat0 = self.lat0
+        lon0 = self.lon0
 
         if not inverse:
             if symbolic:
@@ -119,17 +128,17 @@ class Base:
 
             return lon, lat
 
-    def initial_guess(self, flight: pd.DataFrame = None):
-        m_guess = self.mass_init * np.ones(self.nodes + 1)
-        ts_guess = np.linspace(0, 6 * 3600, self.nodes + 1)
+    def initial_guess(self, sc, flight: pd.DataFrame = None):
+        m_guess = sc["mass_init"] * np.ones(sc["nodes"] + 1)
+        ts_guess = np.linspace(0, 6 * 3600, sc["nodes"] + 1)
 
         if flight is None:
-            h_cr = self.aircraft["cruise"]["height"]
-            xp_0, yp_0 = self.proj(self.lon1, self.lat1)
-            xp_f, yp_f = self.proj(self.lon2, self.lat2)
-            xp_guess = np.linspace(xp_0, xp_f, self.nodes + 1)
-            yp_guess = np.linspace(yp_0, yp_f, self.nodes + 1)
-            h_guess = h_cr * np.ones(self.nodes + 1)
+            h_cr = sc["aircraft"]["cruise"]["height"]
+            xp_0, yp_0 = self.proj(sc["lon1"], sc["lat1"])
+            xp_f, yp_f = self.proj(sc["lon2"], sc["lat2"])
+            xp_guess = np.linspace(xp_0, xp_f, sc["nodes"] + 1)
+            yp_guess = np.linspace(yp_0, yp_f, sc["nodes"] + 1)
+            h_guess = h_cr * np.ones(sc["nodes"] + 1)
         else:
             xp_guess, yp_guess = self.proj(flight.longitude, flight.latitude)
             h_guess = flight.altitude * ft
@@ -145,28 +154,38 @@ class Base:
 
         return np.vstack([xp_guess, yp_guess, h_guess, m_guess, ts_guess]).T
 
-    def enable_wind(self, windfield: pd.DataFrame):
-        self.wind = tools.PolyWind(
-            windfield, self.proj, self.lat1, self.lon1, self.lat2, self.lon2
+    def enable_wind(self, sc, windfield: pd.DataFrame):
+        sc["wind"] = tools.PolyWind(
+            windfield,
+            lambda lon, lat, **kw: self.proj(lon, lat, **kw),
+            sc["lat1"],
+            sc["lon1"],
+            sc["lat2"],
+            sc["lon2"],
         )
 
-    def change_engine(self, engtype):
-        self.engtype = engtype
-        self.engine = oc.prop.engine(engtype)
-        self.thrust = oc.Thrust(
-            self.actype,
+    def change_engine(self, sc, engtype):
+        sc["engtype"] = engtype
+        sc["engine"] = oc.prop.engine(engtype)
+
+        sc["thrust"] = oc.Thrust(
+            sc["actype"],
             engtype,
             use_synonym=self.use_synonym,
             force_engine=True,
         )
-        self.fuelflow = oc.FuelFlow(
-            self.actype,
+
+        sc["fuelflow"] = oc.FuelFlow(
+            sc["actype"],
             engtype,
             wave_drag=True,
             use_synonym=self.use_synonym,
             force_engine=True,
         )
-        self.emission = oc.Emission(self.actype, engtype, use_synonym=self.use_synonym)
+
+        sc["emission"] = oc.Emission(
+            sc["actype"], engtype, use_synonym=self.use_synonym
+        )
 
     def collocation_coeff(self):
         # Get collocation points using Legendre polynomials
@@ -203,7 +222,7 @@ class Base:
 
         return C, D, B
 
-    def xdot(self, x, u) -> ca.MX:
+    def xdot(self, sc, x, u) -> ca.MX:
         """Ordinary differential equation for cruising
 
         Args:
@@ -220,16 +239,15 @@ class Base:
         gamma = ca.arctan2(vs, v)
 
         dx = v * ca.sin(psi) * ca.cos(gamma)
-        if self.wind is not None:
-            dx += self.wind.calc_u(xp, yp, h, ts)
-
         dy = v * ca.cos(psi) * ca.cos(gamma)
-        if self.wind is not None:
-            dy += self.wind.calc_v(xp, yp, h, ts)
+
+        if sc.get("wind") is not None:
+            dx += sc["wind"].calc_u(xp, yp, h, ts)
+            dy += sc["wind"].calc_v(xp, yp, h, ts)
 
         dh = vs
 
-        dm = -self.fuelflow.enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT)
+        dm = -sc["fuelflow"].enroute(m, v / kts, h / ft, vs / fpm, dT=self.dT)
 
         dt = 1
 
@@ -237,6 +255,7 @@ class Base:
 
     def setup(
         self,
+        sc,
         nodes: int | None = None,
         polydeg: int = 3,
         debug=False,
@@ -244,14 +263,14 @@ class Base:
         **kwargs,
     ):
         if nodes is not None:
-            self.nodes = nodes
+            sc["nodes"] = nodes
         else:
-            self.nodes = int(self.range / 50_000)  # node every 50km
+            sc["nodes"] = int(sc["range"] / 50_000)  # node every 50km
 
         max_nodes = kwargs.get("max_nodes", 120)
 
-        self.nodes = max(20, self.nodes)
-        self.nodes = min(max_nodes, self.nodes)
+        sc["nodes"] = max(20, sc["nodes"])
+        # sc["nodes"] = min(max_nodes, sc["nodes"])
 
         self.polydeg = polydeg
 
@@ -288,9 +307,8 @@ class Base:
         for key, value in ipopt_kwargs.items():
             self.solver_options[f"ipopt.{key}"] = value
 
-    def init_model(self, objective, **kwargs):
+    def init_model(self, sc, objective, **kwargs):
         autoscale_cost = kwargs.get("auto_scale_cost", False)
-
         # Model variables
         xp = ca.MX.sym("xp")
         yp = ca.MX.sym("yp")
@@ -302,43 +320,96 @@ class Base:
         vs = ca.MX.sym("vs")
         psi = ca.MX.sym("psi")
 
-        self.x = ca.vertcat(xp, yp, h, m, ts)
-        self.u = ca.vertcat(mach, vs, psi)
+        sc["x"] = ca.vertcat(xp, yp, h, m, ts)
+        sc["u"] = ca.vertcat(mach, vs, psi)
 
-        self.ts_final = ca.MX.sym("ts_final")
+        sc["ts_final"] = ca.MX.sym("ts_final")
 
         # Control discretization
-        self.dt = self.ts_final / self.nodes
+        sc["dt"] = sc["ts_final"] / sc["nodes"]
 
         # Handel objective function
         if isinstance(objective, Callable):
-            self.objective = objective
+            sc["objective"] = objective
         elif objective.lower().startswith("ci:"):
             ci = int(objective[3:])
             kwargs["ci"] = ci
-            self.objective = self.obj_ci
+            sc["objective"] = self.obj_ci
         else:
-            self.objective = getattr(self, f"obj_{objective}")
+            sc["objective"] = getattr(self, f"obj_{objective}")
 
-        L = self.objective(self.x, self.u, self.dt, **kwargs)
+        L = sc["objective"](sc, sc["x"], sc["u"], sc["dt"], **kwargs)
 
         if autoscale_cost:
             # scale objective based on initial guess
-            x0 = self.x_guess.T
-            u0 = self.u_guess
-            dt0 = self.range / 200 / self.nodes
-            cost = np.sum(self.objective(x0, u0, dt0, symbolic=False, **kwargs))
+            x0 = sc["x_guess"].T
+            u0 = sc["u_guess"]
+            dt0 = sc["range"] / 200 / sc["nodes"]
+            cost = np.sum(sc["objective"](x0, u0, dt0, symbolic=False, **kwargs))
             L = L / cost * 1e3
 
         # Continuous time dynamics
-        self.func_dynamics = ca.Function(
-            "f",
-            [self.x, self.u],
-            [self.xdot(self.x, self.u), L],
+        sc["func_dynamics"] = ca.Function(
+            f"f_sc_{sc['id']}",
+            [sc["x"], sc["u"]],
+            [self.xdot(sc, sc["x"], sc["u"]), L],
             ["x", "u"],
             ["xdot", "L"],
             {"allow_free": True},
         )
+
+    def interpolate_state(self, X, k, Xc, dt, tau):
+        """
+        Interpolate state inside collocation interval using Lagrange polynomials.
+        X   : state at interval start
+        Xc  : list of collocation states
+        dt  : interval duration
+        tau : normalized time in [0,1]
+        """
+        # Lagrange basis (polydeg = 3 example)
+        L = [None] * (self.polydeg + 1)
+        tau_root = np.append(0, ca.collocation_points(self.polydeg, "legendre"))
+
+        for j in range(self.polydeg + 1):
+            lj = 1
+            for r in range(self.polydeg + 1):
+                if r != j:
+                    lj *= (tau - tau_root[r]) / (tau_root[j] - tau_root[r])
+            L[j] = lj
+
+        x_tau = L[0] * X
+        for j in range(self.polydeg):
+            x_tau += L[j + 1] * Xc[j]
+
+        return x_tau
+
+    def interpolate_state_global(self, X, Xc, dt, t0, t, nodes):
+        """
+        Interpolates trajectory at absolute time t
+        """
+        x_interp = 0
+
+        for k in range(nodes):
+
+            t_k0 = t0 + k * dt
+            t_k1 = t0 + (k + 1) * dt
+
+            # smooth activation (≈ indicator)
+            wk = 0.5 * (ca.tanh(50 * (t - t_k0)) - ca.tanh(50 * (t - t_k1)))
+
+            tau = (t - t_k0) / dt
+
+            xk = self.interpolate_state(
+                X[k],
+                k,
+                Xc[k],
+                dt,
+                tau,
+            )
+
+            x_interp += wk * xk
+
+        return x_interp
 
     def _calc_emission(self, x, u, symbolic=True):
         xp, yp, h, m = x[0], x[1], x[2], x[3]
@@ -366,17 +437,17 @@ class Base:
 
         return co2, h2o, sox, soot, nox
 
-    def obj_fuel(self, x, u, dt, symbolic=True, **kwargs):
+    def obj_fuel(self, sc, x, u, dt, symbolic=True, **kwargs):
         xp, yp, h, m, ts = x[0], x[1], x[2], x[3], x[4]
         mach, vs, psi = u[0], u[1], u[2]
 
         if symbolic:
-            fuelflow = self.fuelflow
+            fuelflow = sc["fuelflow"]
             v = oc.aero.mach2tas(mach, h, dT=self.dT)
         else:
             fuelflow = openap.FuelFlow(
-                self.actype,
-                self.engtype,
+                sc["actype"],
+                sc["engtype"],
                 use_synonym=self.use_synonym,
                 force_engine=True,
             )
@@ -515,7 +586,7 @@ class Base:
 
         x0 = self.x_guess.T
         u0 = self.u_guess
-        dt0 = self.range / 200 / self.nodes
+        dt0 = self.range / 200 / sc["nodes"]
 
         kwargs_ = kwargs.copy()
         kwargs_["symbolic"] = False
@@ -528,25 +599,7 @@ class Base:
 
         return ratio * c1 / n1 + (1 - ratio) * c2 / n2
 
-    def to_trajectory(self, ts_final, x_opt, u_opt, **kwargs):
-        """Convert optimization results to a trajectory DataFrame.
-
-        Args:
-            ts_final: Final timestamp
-            x_opt: Optimized states
-            u_opt: Optimized controls
-            **kwargs: Additional arguments including:
-                - interpolant: Grid cost interpolant function
-                - time_dependent: Whether grid cost is time dependent (default True)
-                - n_dim: Dimension of grid cost, 3 or 4 (default 4)
-
-        Returns:
-            pd.DataFrame: Trajectory with columns including fuel_cost and grid_cost
-        """
-        interpolant = kwargs.get("interpolant", None)
-        time_dependent = kwargs.get("time_dependent", True)
-        n_dim = kwargs.get("n_dim", 4)
-
+    def to_trajectory(self, sc, ts_final, x_opt, u_opt):
         X = x_opt.full()
         U = u_opt.full()
 
@@ -556,36 +609,19 @@ class Base:
         Uf = U1 + (U1 - U2)
 
         U = np.append(U, Uf, axis=1)
-        n = self.nodes + 1
+        n = sc["nodes"] + 1
 
-        self.X = X
-        self.U = U
-        self.dt = ts_final / (n - 1)
+        sc["X"] = X
+        sc["U"] = U
+        sc["dt"] = ts_final / (n - 1)
 
         xp, yp, h, mass, ts = X
         mach, vs, psi = U
         lon, lat = self.proj(xp, yp, inverse=True)
-        ts_ = np.linspace(0, ts_final, n).round(4)
+        ts_ = np.linspace(0, ts_final, n).round(4) + sc["tstart"]
         tas = (openap.aero.mach2tas(mach, h, dT=self.dT) / kts).round(4)
         alt = (h / ft).round()
         vertrate = (vs / fpm).round()
-
-        # Calculate fuel_cost per segment
-        fuel_cost = self.obj_fuel(X, U, self.dt, symbolic=False)
-
-        # Calculate grid_cost per segment (NaN if no interpolant)
-        if interpolant is not None:
-            grid_cost = self.obj_grid_cost(
-                X,
-                U,
-                self.dt,
-                interpolant=interpolant,
-                time_dependent=time_dependent,
-                n_dim=n_dim,
-                symbolic=False,
-            )
-        else:
-            grid_cost = np.full(n, np.nan)
 
         df = pd.DataFrame(
             dict(
@@ -601,14 +637,12 @@ class Base:
                 tas=tas,
                 vertical_rate=vertrate,
                 heading=(np.rad2deg(psi) % 360).round(4),
-                fuel_cost=fuel_cost,
-                grid_cost=grid_cost,
             )
         )
 
         fuelflow = openap.FuelFlow(
-            self.actype,
-            self.engtype,
+            sc["actype"],
+            sc["engtype"],
             use_synonym=self.use_synonym,
             force_engine=True,
         )
@@ -620,10 +654,8 @@ class Base:
                 )
             )
         )
-
-        if self.wind:
-            wu = self.wind.calc_u(xp, yp, h, ts)
-            wv = self.wind.calc_v(xp, yp, h, ts)
-            df = df.assign(wu=wu, wv=wv)
-
         return df
+        # if self.wind:
+        #     wu = self.wind.calc_u(xp, yp, h, ts)
+        #     wv = self.wind.calc_v(xp, yp, h, ts)
+        #     df = df.assign(wu=wu, wv=wv)
