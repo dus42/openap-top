@@ -35,8 +35,14 @@ class Climb(Base):
             h_end_min = self.range * np.sin(1 * pi / 180)
             h_end_max = self.range * np.sin(10 * pi / 180)
         else:
-            h_end_min = h_end - 100
-            h_end_max = h_end + 100
+            h_end_min = h_end
+            h_end_max = h_end
+
+        alt_min = kwargs.get("alt_start", None)
+        if alt_min is None:
+            h_min = 100 * ft
+        else:
+            h_min = alt_min * ft
 
         mach_end = kwargs.get("mach_end", None)
         if mach_end is None:
@@ -68,7 +74,7 @@ class Climb(Base):
         mass_0 = self.mass_init
         mass_oew = self.aircraft["oew"]
         mach_max = self.aircraft["mmo"]
-        h_min = 100 * ft
+        # h_min = 100 * ft
         h_max = self.aircraft["ceiling"]
 
         # Initial conditions - Lower and upper bounds
@@ -92,8 +98,8 @@ class Climb(Base):
         self.x_guess = np.vstack([xp_guess, yp_guess, h_guess, m_guess, ts_guess]).T
 
         # Control init - lower and upper bounds
-        self.u_0_lb = [0.2, 0 * fpm, psi_start]
-        self.u_0_ub = [0.3, 2500 * fpm, psi_start]
+        self.u_0_lb = [0.2, 1000 * fpm, psi_start]
+        self.u_0_ub = [0.3, 3000 * fpm, psi_start]
 
         # Control final - lower and upper bounds
         if trk_end_0 is None:
@@ -108,8 +114,8 @@ class Climb(Base):
         self.u_ub = [mach_max, 3000 * fpm, psi_end + 2 * pi]
 
         # Control - guesses
-        self.u_0_guess = [0.3, 1500 * fpm, psi_start]
-        self.u_guess = [0.3, 1500 * fpm, psi_end]
+        self.u_0_guess = [0.3, 2500 * fpm, psi_start]
+        self.u_guess = [0.3, 2500 * fpm, psi_end]
 
     def trajectory(self, objective="fuel", df_cruise=None, **kwargs) -> pd.DataFrame:
         df_cruise = kwargs.get("df_cruise", None)
