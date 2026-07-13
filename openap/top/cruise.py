@@ -64,16 +64,16 @@ class Cruise(Base):
         sc["x_ub"] = [x_max, y_max, h_max, sc["mass_init"], ts_max]
 
         # Control init - lower and upper bounds
-        sc["u_0_lb"] = [0.5, -500 * fpm, psi - pi / 4]
-        sc["u_0_ub"] = [sc["mach_max"], 500 * fpm, psi + pi / 4]
+        sc["u_0_lb"] = [0.5, -500 * fpm, psi - pi]
+        sc["u_0_ub"] = [sc["mach_max"], 500 * fpm, psi + pi]
 
         # Control final - lower and upper bounds
-        sc["u_f_lb"] = [0.5, -500 * fpm, psi - pi / 4]
-        sc["u_f_ub"] = [sc["mach_max"], 500 * fpm, psi + pi / 4]
+        sc["u_f_lb"] = [0.5, -500 * fpm, psi - pi]
+        sc["u_f_ub"] = [sc["mach_max"], 500 * fpm, psi + pi]
 
         # Control - Lower and upper bound
-        sc["u_lb"] = [0.5, -500 * fpm, psi - pi / 2]
-        sc["u_ub"] = [sc["mach_max"], 500 * fpm, psi + pi / 2]
+        sc["u_lb"] = [0.5, -500 * fpm, psi - pi]
+        sc["u_ub"] = [sc["mach_max"], 500 * fpm, psi + pi]
 
         # Initial guess - states
         sc["x_guess"] = self.initial_guess(sc)
@@ -111,7 +111,15 @@ class Cruise(Base):
 
             initial_guess = kwargs.get("initial_guess", None)
             if initial_guess is not None:
-                sc["x_guess"] = self.initial_guess(initial_guess)
+                # accept a list (one per scenario) or a single DataFrame
+                ig = (
+                    initial_guess[isc]
+                    if isinstance(initial_guess, (list, tuple))
+                    else initial_guess
+                )
+                sc["x_guess"] = self.initial_guess(sc, flight=ig)
+            else:
+                sc["x_guess"] = self.initial_guess(sc)
 
         customized_max_fuel = kwargs.get("max_fuel", None)
         return_failed = kwargs.get("return_failed", False)
@@ -223,7 +231,7 @@ class Cruise(Base):
             w.append(sc["ts_final"])
             lbw.append([0])
             ubw.append([ca.inf])
-            w0.append([sc["range"] * 1000 / 200])
+            w0.append([sc["range"] / 200])
 
             # aircraft performane constraints
             for k in range(nodes):
@@ -256,20 +264,9 @@ class Cruise(Base):
             # ts and dt should be consistent
             for k in range(nodes - 1):
                 g.append(X[isc][k + 1][4] - X[isc][k][4] - sc["dt"])
-                lbg.append([-1e-3])
-                ubg.append([1e-3])
+                lbg.append([-1])
+                ubg.append([1])
 
-            # # smooth Mach number change
-            # for k in range(self.nodes - 1):
-            #     g.append(U[k + 1][0] - U[k][0])
-            #     lbg.append([-0.2])
-            #     ubg.append([0.2])  # to be tunned
-
-            # # smooth vertical rate change
-            # for k in range(self.nodes - 1):
-            #     g.append(U[k + 1][1] - U[k][1])
-            #     lbg.append([-500 * fpm])
-            #     ubg.append([500 * fpm])  # to be tunned
 
             # smooth heading change
             for k in range(nodes - 1):
@@ -277,103 +274,71 @@ class Cruise(Base):
                 lbg.append([-15 * pi / 180])
                 ubg.append([15 * pi / 180])
 
-            # # optional constraints
-            # if self.fix_mach:
-            #     for k in range(self.nodes - 1):
-            #         g.append(U[k + 1][0] - U[k][0])
-            #         lbg.append([0])
-            #         ubg.append([0])
+            # optional constraints
+            if self.fix_mach:
+                for k in range(nodes - 1):
+                    g.append(U[isc][k + 1][0] - U[isc][k][0])
+                    lbg.append([0])
+                    ubg.append([0])
 
-            # if self.fix_alt:
-            #     for k in range(self.nodes):
-            #         g.append(U[k][1])
-            #         lbg.append([0])
-            #         ubg.append([0])
+            if self.fix_alt:
+                for k in range(nodes):
+                    g.append(U[isc][k][1])
+                    lbg.append([0])
+                    ubg.append([0])
 
-            # if self.fix_track:
-            #     for k in range(self.nodes - 1):
-            #         g.append(U[k + 1][2] - U[k][2])
-            #         lbg.append([0])
-            #         ubg.append([0])
+            if self.fix_track:
+                for k in range(nodes - 1):
+                    g.append(U[isc][k + 1][2] - U[isc][k][2])
+                    lbg.append([0])
+                    ubg.append([0])
 
-            # if not self.allow_descent:
-            #     for k in range(self.nodes):
-            #         g.append(U[k][1])
-            #         lbg.append([0])
-            #         ubg.append([ca.inf])
+            if not self.allow_descent:
+                for k in range(nodes):
+                    g.append(U[isc][k][1])
+                    lbg.append([0])
+                    ubg.append([ca.inf])
 
-        # Separation constraint
-        Rxy = 6.57 * oc.aero.nm
-        Rz = 1541 * oc.aero.ft
-        if len(self.scenarios) == 2:
-            # for k in range(self.scenarios[0]["nodes"]):
-            #     for k2 in range(self.scenarios[1]["nodes"]):
-            #         v_tas2 = oc.aero.mach2tas(
-            #             U[1][k2][0], X[1][k2][2], dT=self.dT
-            #         )  # m/s
-            #         vs2 = U[1][k2][1]  # m/s
-            #         psi2 = U[1][k2][2]  # rad
-            #         ts1 = self.scenarios[0]["tstart"] + X[0][k][4]
-            #         ts2 = self.scenarios[1]["tstart"] + X[1][k2][4]
-            #         dist_x = v_tas2 * ca.sin(psi2) * (ts1 - ts2) - (
-            #             X[0][k][0] - X[1][k2][0]
-            #         )
-            #         dist_y = v_tas2 * ca.cos(psi2) * (ts1 - ts2) - (
-            #             X[0][k][1] - X[1][k2][1]
-            #         )
-            #         dist_z = vs2 * (ts1 - ts2) - (X[0][k][2] - X[1][k2][2])
-            #         ellipsoid = (
-            #             (dist_x / Rxy) ** 2 + (dist_y / Rxy) ** 2 + (dist_z / Rz) ** 2
-            #         )
-            #         g.append(ellipsoid)
-            #         lbg.append([1.2])
-            #         ubg.append([ca.inf])
+        # # Separation constraint
+        if len(self.scenarios) > 1 and self.conflict:
+            Rxy = 5.0 * oc.aero.nm
+            Rz = 1000 * oc.aero.ft
 
-            t_start_global = min(sc["tstart"] for sc in self.scenarios)
-            t_end_global = max(
-                sc["tstart"] + sc["range"] / 200 for sc in self.scenarios
-            )
-            min_nodes = min(min(sc["nodes"] for sc in self.scenarios), 20)
-            t_sync = np.linspace(t_start_global, t_end_global, 2 * min_nodes)
+            guess = kwargs.get("initial_guess", None)
+            if guess is not None:
+                pair_times = self.candidate_sync_times(guess)
+            else:
+                # fallback: coarse overlap grid per pair (no warm start to detect from)
+                pair_times = {}
+                for i in range(len(self.scenarios)):
+                    for j in range(i + 1, len(self.scenarios)):
+                        sci, scj = self.scenarios[i], self.scenarios[j]
+                        t0 = max(sci["tstart"], scj["tstart"])
+                        t1 = min(
+                            sci["tstart"] + sci["range"] / 200,
+                            scj["tstart"] + scj["range"] / 200,
+                        )
+                        if t1 > t0:
+                            pair_times[(i, j)] = np.linspace(t0, t1, 60)
 
-            for t in t_sync:
-                Xsync = []
-
-                for isc, sc in enumerate(self.scenarios):
-
-                    x_t = self.interpolate_state_global(
-                        X[isc],
-                        Xc_store[isc],
-                        sc["dt"],
-                        sc["tstart"],
-                        t,
-                        sc["nodes"],
+            for (i, j), tsync in pair_times.items():
+                sci, scj = self.scenarios[i], self.scenarios[j]
+                for t in tsync:
+                    xi = self.interpolate_state_global(
+                        X[i], Xc_store[i], sci["dt"], sci["tstart"], t, sci["nodes"]
                     )
-
-                    Xsync.append(x_t)
-
-                # ---- separation constraint (2 scenarios) ----
-                dist_x = Xsync[0][0] - Xsync[1][0]
-                dist_y = Xsync[0][1] - Xsync[1][1]
-                dist_z = Xsync[0][2] - Xsync[1][2]
-
-                ellipsoid = (
-                    (dist_x / Rxy) ** 2 + (dist_y / Rxy) ** 2 + (dist_z / Rz) ** 2
-                )
-
-                g.append(ellipsoid)
-                lbg.append([1])
-                ubg.append([ca.inf])
-
-        # # add fuel constraint
-        # g.append(X[0][3] - X[-1][3])
-        # lbg.append([0])
-        # ubg.append([self.fuel_max])
-
-        # if customized_max_fuel is not None:
-        #     g.append(X[0][3] - X[-1][3] - customized_max_fuel)
-        #     lbg.append([-ca.inf])
-        #     ubg.append([0])
+                    xj = self.interpolate_state_global(
+                        X[j], Xc_store[j], scj["dt"], scj["tstart"], t, scj["nodes"]
+                    )
+                    dist_x = xi[0] - xj[0]
+                    dist_y = xi[1] - xj[1]
+                    dist_z = xi[2] - xj[2]
+                    ellipsoid = (
+                        (dist_x / Rxy) ** 2 + (dist_y / Rxy) ** 2 + (dist_z / Rz) ** 8
+                    )
+                    g.append(ellipsoid)
+                    lbg.append([1.3])
+                    ubg.append([ca.inf])
 
         # Concatenate vectors
         w = ca.vertcat(*w)
@@ -436,19 +401,22 @@ class Cruise(Base):
 
         # self.trajectories = dfs
 
-        # df_copy = df.copy()
-
         # check if the optimizer has failed
-        if not self.solver.stats()["success"]:
-            warnings.warn("flight might be infeasible.")
+        # if not self.solver.stats()["success"]:
+        #     warnings.warn("flight might be infeasible.")
 
-        if df.altitude.max() < 5000:
-            warnings.warn("max altitude < 5000 ft, optimization seems to have failed.")
-            df = None
+        # # Validate each trajectory
+        # for isc, df in enumerate(trajectories):
+        #     if df.altitude.max() < 5000:
+        #         warnings.warn(
+        #             f"Scenario {isc}: max altitude < 5000 ft, optimization seems to have failed."
+        #         )
 
-        if df is not None:
-            final_mass = df.mass.iloc[-1]
+        #     final_mass = df.mass.iloc[-1]
+        #     sc = self.scenarios[isc]
+        #     if final_mass < sc["oew"]:
+        #         warnings.warn(
+        #             f"Scenario {isc}: final mass condition violated (smaller than OEW)."
+        #         )
 
-            if final_mass < self.oew:
-                warnings.warn("final mass condition violated (smaller than OEW).")
-                df = None
+        # return trajectories

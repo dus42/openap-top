@@ -21,6 +21,7 @@ class Base:
         scenarios: List[Dict],
         dT: float = 0.0,
         use_synonym: bool = False,
+        **kwargs,
     ):
         """OpenAP trajectory optimizer.
 
@@ -36,7 +37,9 @@ class Base:
         self.scenarios = scenarios
         self.lat0 = None
         self.lon0 = None
-
+        self.max_nodes = kwargs.get("max_nodes", 120)
+        self.debug = kwargs.get("debug", False)
+        self.conflict = kwargs.get("conflict", False)
         for sc in self.scenarios:
             actype = sc["actype"]
             if isinstance(sc["origin"], str):
@@ -258,7 +261,7 @@ class Base:
         sc,
         nodes: int | None = None,
         polydeg: int = 3,
-        debug=False,
+        debug=True,
         ipopt_kwargs={},
         **kwargs,
     ):
@@ -267,20 +270,20 @@ class Base:
         else:
             sc["nodes"] = int(sc["range"] / 50_000)  # node every 50km
 
-        max_nodes = kwargs.get("max_nodes", 120)
+        max_nodes = self.max_nodes
 
         sc["nodes"] = max(20, sc["nodes"])
-        # sc["nodes"] = min(max_nodes, sc["nodes"])
+        sc["nodes"] = min(max_nodes, sc["nodes"])
 
         self.polydeg = polydeg
 
-        max_iteration = kwargs.get("max_iteration", kwargs.get("max_iterations", 3000))
+        max_iteration = kwargs.get("max_iteration", kwargs.get("max_iterations", 5000))
         tol = kwargs.get("tol", 1e-6)
         acceptable_tol = kwargs.get("acceptable_tol", 1e-4)
         alpha_for_y = kwargs.get("alpha_for_y", "primal-and-full")
         hessian_approximation = kwargs.get("hessian_approximation", "limited-memory")
 
-        self.debug = debug
+        debug = self.debug
 
         if debug:
             print("Calculating optimal trajectory...")
@@ -358,6 +361,7 @@ class Base:
             {"allow_free": True},
         )
 
+    # maybe move into tools.py
     def interpolate_state(self, X, k, Xc, dt, tau):
         """
         Interpolate state inside collocation interval using Lagrange polynomials.
@@ -383,33 +387,62 @@ class Base:
 
         return x_tau
 
+    # maybe move into tools.py
     def interpolate_state_global(self, X, Xc, dt, t0, t, nodes):
-        """
-        Interpolates trajectory at absolute time t
-        """
-        x_interp = 0
-
+        """State at absolute time t: smooth, partition-of-unity, gradient-safe in dt."""
+        num = 0
+        den = 0
         for k in range(nodes):
+            t_kc = t0 + (k + 0.5) * dt  # interval center
+            s = (t - t_kc) / dt  # distance in *interval units* (dimensionless)
+            wk = ca.exp(-(s**2) / 0.5)  # soft, overlapping, smooth in dt
+            tau = ca.fmin(
+                1.0, ca.fmax(0.0, (t - (t0 + k * dt)) / dt)
+            )  # clamp -> no extrapolation
+            xk = self.interpolate_state(X[k], k, Xc[k], dt, tau)
+            num += wk * xk
+            den += wk
+        return num / (den + 1e-9)  # normalize -> partition of unity
 
-            t_k0 = t0 + k * dt
-            t_k1 = t0 + (k + 1) * dt
+    # maybe move into tools.py
+    def candidate_sync_times(
+        self,
+        guess_trajs,
+        watch_factor=1.5,  # flag closeness within this many separation-radii
+        detect_dt=15.0,  # numpy detection scan spacing (cheap, no constraints)
+        fine_dt=10.0,  # constraint spacing inside an encounter window
+        buffer=35.0,  # half-width of the fine window around each encounter (s)
+        bg_dt=250.0,  # sparse background spacing over the overlap (drift safety)
+    ):
+        """Per-pair sync times, dense only where aircraft are predicted to be close."""
+        Rxy = 5 * oc.aero.nm
+        Rz = 1000 * oc.aero.ft
+        arrs = [(d.ts.values, d.x.values, d.y.values, d.h.values) for d in guess_trajs]
 
-            # smooth activation (≈ indicator)
-            wk = 0.5 * (ca.tanh(50 * (t - t_k0)) - ca.tanh(50 * (t - t_k1)))
+        pair_times = {}
+        for i in range(len(guess_trajs)):
+            for j in range(i + 1, len(guess_trajs)):
+                ti, xi, yi, hi = arrs[i]
+                tj, xj, yj, hj = arrs[j]
+                t0 = max(ti.min(), tj.min())
+                t1 = min(ti.max(), tj.max())
+                if t1 <= t0:
+                    continue  # no temporal overlap -> this pair can never conflict
 
-            tau = (t - t_k0) / dt
+                # cheap detection scan (numpy only)
+                td = np.arange(t0, t1, detect_dt)
+                ex = ((np.interp(td, ti, xi) - np.interp(td, tj, xj)) / Rxy) ** 2
+                ey = ((np.interp(td, ti, yi) - np.interp(td, tj, yj)) / Rxy) ** 2
+                ez = ((np.interp(td, ti, hi) - np.interp(td, tj, hj)) / Rz) ** 8
+                near = td[(ex + ey + ez) < watch_factor**2]
 
-            xk = self.interpolate_state(
-                X[k],
-                k,
-                Xc[k],
-                dt,
-                tau,
-            )
+                grids = [np.arange(t0, t1, bg_dt)]  # sparse background
+                for tn in near:  # dense near encounters
+                    grids.append(np.arange(tn - buffer, tn + buffer + fine_dt, fine_dt))
 
-            x_interp += wk * xk
-
-        return x_interp
+                allt = np.unique(np.concatenate(grids))
+                pair_times[(i, j)] = allt[(allt >= t0) & (allt <= t1)]
+        return pair_times
 
     def _calc_emission(self, x, u, symbolic=True):
         xp, yp, h, m = x[0], x[1], x[2], x[3]
